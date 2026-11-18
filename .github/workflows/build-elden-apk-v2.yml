@@ -1,0 +1,54 @@
+name: Build Elden Games APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode source archive
+        run: |
+          base64 -d elden-source.zip.b64 > elden-source.zip
+          mkdir source
+          unzip -q elden-source.zip -d source
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Prepare Flutter project
+        run: |
+          flutter create --org com.eldengames --project-name elden_games --platforms=android build_app
+          rm -rf build_app/lib
+          cp -r source/app/lib build_app/lib
+          cp source/app/pubspec.yaml build_app/pubspec.yaml
+          mkdir -p build_app/assets
+          python3 - <<'PY'
+          import struct, zlib
+          def png(path, rgba):
+              w=h=512
+              raw=b''.join(b'\x00'+bytes(rgba)*w for _ in range(h))
+              def chunk(t,d):
+                  return struct.pack('!I',len(d))+t+d+struct.pack('!I',zlib.crc32(t+d)&0xffffffff)
+              data=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
+              open(path,'wb').write(data)
+          png('build_app/assets/icon.png',(25,25,35,255))
+          png('build_app/assets/icon_fg.png',(255,255,255,255))
+          PY
+          python3 source/.github/scripts/patch_android.py
+      - name: Build release APK
+        working-directory: build_app
+        run: |
+          flutter pub get
+          dart run flutter_launcher_icons
+          flutter build apk --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EldenGames-app-apk
+          path: build_app/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
